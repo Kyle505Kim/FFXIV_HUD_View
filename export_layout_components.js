@@ -82,24 +82,35 @@ function deriveRows(buf, section, width, height) {
     const flags = buf.readUInt32LE(off + 0x18);
     const tail = buf.readUInt32LE(off + 0x1c);
 
-    const baseX = (packedBase & 0xffff) / 2;
-    const baseY = ((packedBase >>> 16) & 0xffff) / 2;
-    const x = baseX + storedX * (width / 100);
-    const y = baseY + storedY * (height / 100);
+    const packedLow = packedBase & 0xffff;
+    const packedHigh = (packedBase >>> 16) & 0xffff;
+    const halfLow = packedLow / 2;
+    const halfHigh = packedHigh / 2;
+    const rawScreenX = storedX * (width / 100);
+    const rawScreenY = storedY * (height / 100);
+    const modelAX = halfLow + rawScreenX;
+    const modelAY = halfHigh + rawScreenY;
 
     rows.push({
       offset: hex(off, 4),
       id: hex(id, 8),
       name: "",
-      position: `<${formatCoord(x)}, ${formatCoord(y)}>`,
-      x_display: formatCoord(x),
-      y_display: formatCoord(y),
-      x_raw: formatFloat(x),
-      y_raw: formatFloat(y),
+      position_model_a: `<${formatCoord(modelAX)}, ${formatCoord(modelAY)}>`,
+      model_a_x_display: formatCoord(modelAX),
+      model_a_y_display: formatCoord(modelAY),
+      model_a_x_raw: formatFloat(modelAX),
+      model_a_y_raw: formatFloat(modelAY),
+      position_raw_screen: `<${formatCoord(rawScreenX)}, ${formatCoord(rawScreenY)}>`,
+      raw_screen_x_display: formatCoord(rawScreenX),
+      raw_screen_y_display: formatCoord(rawScreenY),
+      raw_screen_x_raw: formatFloat(rawScreenX),
+      raw_screen_y_raw: formatFloat(rawScreenY),
       stored_x: formatFloat(storedX),
       stored_y: formatFloat(storedY),
-      base_x: formatFloat(baseX),
-      base_y: formatFloat(baseY),
+      packed_low16: String(packedLow),
+      packed_high16: String(packedHigh),
+      half_low16: formatFloat(halfLow),
+      half_high16: formatFloat(halfHigh),
       scale: formatFloat(scale),
       zero: hex(zero, 8),
       packed_base: hex(packedBase, 8),
@@ -120,12 +131,12 @@ function sortRows(rows, sortMode) {
   }
 
   copy.sort((a, b) => {
-    const ay = Number(a.y_raw);
-    const by = Number(b.y_raw);
+    const ay = Number(a.model_a_y_raw);
+    const by = Number(b.model_a_y_raw);
     if (ay !== by) return ay - by;
 
-    const ax = Number(a.x_raw);
-    const bx = Number(b.x_raw);
+    const ax = Number(a.model_a_x_raw);
+    const bx = Number(b.model_a_x_raw);
     if (ax !== bx) return ax - bx;
 
     return Number.parseInt(a.offset, 16) - Number.parseInt(b.offset, 16);
@@ -145,15 +156,22 @@ function toCsv(rows) {
     "offset",
     "id",
     "name",
-    "position",
-    "x_display",
-    "y_display",
-    "x_raw",
-    "y_raw",
+    "position_model_a",
+    "model_a_x_display",
+    "model_a_y_display",
+    "model_a_x_raw",
+    "model_a_y_raw",
+    "position_raw_screen",
+    "raw_screen_x_display",
+    "raw_screen_y_display",
+    "raw_screen_x_raw",
+    "raw_screen_y_raw",
     "stored_x",
     "stored_y",
-    "base_x",
-    "base_y",
+    "packed_low16",
+    "packed_high16",
+    "half_low16",
+    "half_high16",
     "scale",
     "zero",
     "packed_base",
@@ -176,27 +194,31 @@ function toMarkdown(rows, width, height, section) {
   lines.push("");
   lines.push(`- Source file: \`ADDON.DAT\``);
   lines.push(`- Section: \`${section.name}\` (\`${hex(section.start, 4)}..${hex(section.end - 1, 4)}\`)`);
-  lines.push("- Sorted by derived Y, then derived X.");
+  lines.push("- Sorted by `model_a` Y, then `model_a` X.");
   lines.push("- `name` is intentionally blank for manual labeling.");
-  lines.push("- Position uses the current export model:");
-  lines.push("  - `x = base_x + stored_x * (screen_width / 100)`");
-  lines.push("  - `y = base_y + stored_y * (screen_height / 100)`");
-  lines.push("- `base_x` and `base_y` are derived from packed field `+0x14` as `low16/2` and `high16/2`.");
-  lines.push("- Confidence is high for component `0x21E53CCE` and medium for the rest of the table until more components are manually confirmed.");
+  lines.push("- This table now exposes two coordinate views because one universal display-position formula is not yet confirmed for every component family.");
+  lines.push("- `position_model_a` uses the original additive-half model:");
+  lines.push("  - `x = (low16(+0x14) / 2) + stored_x * (screen_width / 100)`");
+  lines.push("  - `y = (high16(+0x14) / 2) + stored_y * (screen_height / 100)`");
+  lines.push("- `position_raw_screen` uses only the normalized stored floats:");
+  lines.push("  - `x = stored_x * (screen_width / 100)`");
+  lines.push("  - `y = stored_y * (screen_height / 100)`");
+  lines.push("- For some known status-info components, the HUD editor X matches `position_raw_screen.x` better than `position_model_a.x`.");
+  lines.push("- Confidence is high for component `0x21E53CCE`, lower for global coordinate interpretation across the full table.");
   lines.push("");
   lines.push("## Columns");
   lines.push("");
-  lines.push("- `position`: rounded to the nearest 0.5 for readability.");
-  lines.push("- `x_raw` / `y_raw`: unrounded derived coordinates.");
+  lines.push("- `position_model_a`: rounded additive-half model output.");
+  lines.push("- `position_raw_screen`: rounded screen-normalized output without `+0x14` offsets.");
   lines.push("- `stored_x` / `stored_y`: raw repeated-section floats.");
-  lines.push("- `base_x` / `base_y`: decoded packed origin values.");
+  lines.push("- `packed_low16` / `packed_high16`: split halves of field `+0x14`.");
   lines.push("");
-  lines.push("| offset | id | name | position | x_display | y_display | x_raw | y_raw | stored_x | stored_y | base_x | base_y | scale | flags |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("| offset | id | name | position_model_a | position_raw_screen | model_a_x | model_a_y | raw_x | raw_y | stored_x | stored_y | packed_low16 | packed_high16 | scale | flags |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
 
   for (const row of rows) {
     lines.push(
-      `| ${row.offset} | ${row.id} |  | ${row.position} | ${row.x_display} | ${row.y_display} | ${row.x_raw} | ${row.y_raw} | ${row.stored_x} | ${row.stored_y} | ${row.base_x} | ${row.base_y} | ${row.scale} | ${row.flags} |`
+      `| ${row.offset} | ${row.id} |  | ${row.position_model_a} | ${row.position_raw_screen} | ${row.model_a_x_display} | ${row.model_a_y_display} | ${row.raw_screen_x_display} | ${row.raw_screen_y_display} | ${row.stored_x} | ${row.stored_y} | ${row.packed_low16} | ${row.packed_high16} | ${row.scale} | ${row.flags} |`
     );
   }
 
