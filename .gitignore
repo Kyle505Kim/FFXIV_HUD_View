@@ -1,4 +1,5 @@
 *.DAT
+*.DAT.old
 *_codex.md
 codex_notes/
 gcm-diagnose.log
